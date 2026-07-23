@@ -168,13 +168,14 @@ def print_feed(feed_data: dict) -> None:
         return
     print(f"Постов в ленте: {len(feed_list)}")
     for i, post in enumerate(feed_list, 1):
+        post_id = post.get("post_id", "N/A")
         author = post.get("author_name", "Неизвестный")
         description = post.get("description", "") or "[без описания]"
         likes = post.get("likes_count", 0)
         comments = post.get("comments_count", 0)
         created = post.get("created_at", "")
         is_liked = "❤️" if post.get("is_liked") else "🤍"
-        print(f"{i}. {author} ({created})")
+        print(f"{i}. {author} ({created}) — ID: {post_id}")
         print(f"   {description[:100]}{'...' if len(description) > 100 else ''}")
         print(f"   👍 {likes}  💬 {comments}  {is_liked}")
         photos = post.get("photos", [])
@@ -191,74 +192,84 @@ def print_feed(feed_data: dict) -> None:
 # ------------------- Основное меню -------------------
 
 if __name__ == "__main__":
-    choice = input_user(['0', '1', '2', '3', '4', '5'], 
-                        "0. Вывести JSON пользователя\n"
-                        "1. Сделать текстовый пост\n"
-                        "2. Удалить пост по ID\n"
-                        "3. Показать комментарии к посту\n"
-                        "4. Показать количество непрочитанных уведомлений\n"
-                        "5. Показать ленту (по умолчанию all, 20 постов)")
-    
-    if choice == '0':
-        print(json.dumps(get_profile("Wonordel", USER_ID).get("data", {}), indent=4, ensure_ascii=False))
-    
-    elif choice == '1':
-        print("Введите пост (``` чтобы закончить, ```` чтобы отменить)")
-        text = ""
-        while True:
-            line_text = input(">>> ")
-            if line_text == '````':
-                exit(0)
-            if line_text == '```':
-                break
-            text += line_text + '\n'
-        publish = publish_post(text) 
-        print(f"Код статуса: {publish['status_code']}")
-        print(f"Данные: {publish['data']}")
-    
-    elif choice == '2':
-        try:
-            post_id = int(input("Введите ID поста для удаления: "))
-            result = delete_post(post_id)
+    while True:
+        choice = input_user(['0', '1', '2', '3', '4', '5', '6'],
+                            "0. Вывести JSON пользователя\n"
+                            "1. Сделать текстовый пост\n"
+                            "2. Удалить пост по ID\n"
+                            "3. Показать комментарии к посту\n"
+                            "4. Показать количество непрочитанных уведомлений\n"
+                            "5. Показать ленту (по умолчанию all, 20 постов)\n"
+                            "6. Выйти")
+        
+        if choice == '0':
+            print(json.dumps(get_profile("Wonordel", USER_ID).get("data", {}), indent=4, ensure_ascii=False))
+        
+        elif choice == '1':
+            print("Введите пост (``` чтобы закончить, ```` чтобы отменить)")
+            lines = []
+            while True:
+                line = input(">>> ")
+                if line == '````':
+                    print("Отменено.")
+                    lines = None
+                    break
+                if line == '```':
+                    break
+                lines.append(line)
+            if lines is not None:
+                text = '\n'.join(lines)
+                publish = publish_post(text) 
+                print(f"Код статуса: {publish['status_code']}")
+                print(f"Данные: {publish['data']}")
+        
+        elif choice == '2':
+            try:
+                post_id = int(input("Введите ID поста для удаления: "))
+                result = delete_post(post_id)
+                print(f"Код статуса: {result['status_code']}")
+                print(f"Ответ сервера: {result['data']}")
+            except ValueError:
+                print("ID должен быть числом.")
+        
+        elif choice == '3':
+            try:
+                post_id = int(input("Введите ID поста: "))
+                result = get_comments(post_id, USER_ID)
+                print(f"Код статуса: {result['status_code']}")
+                if result['status_code'] == 200:
+                    if isinstance(result['data'], list):
+                        print_comments(result['data'])
+                    else:
+                        print("Неожиданный формат ответа:")
+                        print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+                else:
+                    print("Ошибка при получении комментариев:")
+                    print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            except ValueError:
+                print("ID должен быть числом.")
+        
+        elif choice == '4':
+            result = get_unread_count()
             print(f"Код статуса: {result['status_code']}")
-            print(f"Ответ сервера: {result['data']}")
-        except ValueError:
-            print("ID должен быть числом.")
-    
-    elif choice == '3':
-        try:
-            post_id = int(input("Введите ID поста: "))
-            result = get_comments(post_id, USER_ID)
+            print_unread_count(result)
+        
+        elif choice == '5':
+            feed_type = input("Введите тип ленты (по умолчанию 'all'): ") or "all"
+            try:
+                limit = int(input("Введите количество постов (по умолчанию 20): ") or 20)
+                offset = int(input("Введите offset (по умолчанию 0): ") or 0)
+            except ValueError:
+                print("Введено не число, используем значения по умолчанию.")
+                limit, offset = 20, 0
+            result = get_feed(feed_type, limit, offset)
             print(f"Код статуса: {result['status_code']}")
             if result['status_code'] == 200:
-                if isinstance(result['data'], list):
-                    print_comments(result['data'])
-                else:
-                    print("Неожиданный формат ответа:")
-                    print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+                print_feed(result['data'])
             else:
-                print("Ошибка при получении комментариев:")
+                print("Ошибка при получении ленты:")
                 print(json.dumps(result['data'], indent=4, ensure_ascii=False))
-        except ValueError:
-            print("ID должен быть числом.")
-    
-    elif choice == '4':
-        result = get_unread_count()
-        print(f"Код статуса: {result['status_code']}")
-        print_unread_count(result)
-    
-    elif choice == '5':
-        feed_type = input("Введите тип ленты (по умолчанию 'all'): ") or "all"
-        try:
-            limit = int(input("Введите количество постов (по умолчанию 20): ") or 20)
-            offset = int(input("Введите offset (по умолчанию 0): ") or 0)
-        except ValueError:
-            print("Введено не число, используем значения по умолчанию.")
-            limit, offset = 20, 0
-        result = get_feed(feed_type, limit, offset)
-        print(f"Код статуса: {result['status_code']}")
-        if result['status_code'] == 200:
-            print_feed(result['data'])
-        else:
-            print("Ошибка при получении ленты:")
-            print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+        
+        elif choice == '6':
+            print("Выход.")
+            break
