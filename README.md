@@ -15,3 +15,5 @@ python create_secret.py
 ```
 python main.py
 ```
+
+Признаюсь честно, проэкт сделан с помощью ИИ
