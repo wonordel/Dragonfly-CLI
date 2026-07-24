@@ -3,7 +3,6 @@ import json
 import os
 import io
 from PIL import Image
-from ascii_magic import AsciiArt
 
 # ------------------- Загрузка секретов -------------------
 def load_secrets():
@@ -11,18 +10,61 @@ def load_secrets():
     if not os.path.exists(secrets_path):
         raise FileNotFoundError(
             "Файл secret.json не найден. Создайте его в той же папке, что и скрипт, "
-            "с полями USER_AGENT, ACCESS_TOKEN, USER_ID."
+            "с полями USER_AGENT, ACCESS_TOKEN, USER_ID, USERNAME."
         )
     with open(secrets_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    required = ["USER_AGENT", "ACCESS_TOKEN", "USER_ID", "USERNAME"]
+    missing = [k for k in required if k not in data]
+    if missing:
+        raise KeyError(f"В secret.json отсутствуют обязательные поля: {', '.join(missing)}")
+    return data
 
 SECRETS = load_secrets()
 
 USER_AGENT = SECRETS["USER_AGENT"]
 ACCESS_TOKEN = SECRETS["ACCESS_TOKEN"]
 USER_ID = SECRETS["USER_ID"]
+USERNAME = SECRETS["USERNAME"]
 
 BASE_URL = "https://dragonfly-flash.ru"
+
+# ------------------- Загрузка настроек ASCII -------------------
+def load_settings():
+    settings_path = os.path.join(os.path.dirname(__file__), "settings.json")
+    if not os.path.exists(settings_path):
+        # значения по умолчанию, если файл отсутствует
+        return {
+            "ascii_columns": 60,
+            "ascii_chars": "█▓▒░@%#*+=-:. "
+        }
+    with open(settings_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+SETTINGS = load_settings()
+ASCII_COLUMNS = SETTINGS.get("ascii_columns", 60)
+ASCII_CHARS = SETTINGS.get("ascii_chars", "█▓▒░@%#*+=-:. ")
+
+# ------------------- Заголовки и куки -------------------
+BASE_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept": "*/*",
+    "Accept-Language": "ru,en-US;q=0.9,en;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br, zstd",
+    "Referer": f"https://dragonfly-flash.ru/?id={USERNAME}",
+    "Origin": "https://dragonfly-flash.ru",
+    "Connection": "keep-alive",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-GPC": "1",
+    "DNT": "1",
+    "Priority": "u=4",
+    "Pragma": "no-cache",
+    "Cache-Control": "no-cache",
+}
+
+COOKIES = {"access_token": ACCESS_TOKEN}
 
 # ------------------- Вспомогательные функции -------------------
 def input_user(possible: list, text: str):
@@ -55,26 +97,6 @@ def input_multiline_with_cancel(prompt: str, cancel_values=('q', 'отмена',
             break
         lines.append(line)
     return "\n".join(lines)
-
-BASE_HEADERS = {
-    "User-Agent": USER_AGENT,
-    "Accept": "*/*",
-    "Accept-Language": "ru,en-US;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br, zstd",
-    "Referer": "https://dragonfly-flash.ru/?id=Wonordel",
-    "Origin": "https://dragonfly-flash.ru",
-    "Connection": "keep-alive",
-    "Sec-Fetch-Dest": "empty",
-    "Sec-Fetch-Mode": "cors",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-GPC": "1",
-    "DNT": "1",
-    "Priority": "u=4",
-    "Pragma": "no-cache",
-    "Cache-Control": "no-cache",
-}
-
-COOKIES = {"access_token": ACCESS_TOKEN}
 
 # ------------------- Функции API -------------------
 
@@ -249,24 +271,41 @@ def get_feed(feed_type: str = "all", limit: int = 20, offset: int = 0) -> dict:
         "data": response.json() if response.text else {}
     }
 
-def image_to_ascii(url: str, columns: int = 60) -> str:
-    """
-    Загружает изображение по URL и возвращает ASCII-арт.
-    Параметр columns задаёт ширину в символах.
-    """
+def image_to_ascii(url: str, columns: int = None, chars: str = None) -> str:
+    if columns is None:
+        columns = ASCII_COLUMNS
+    if chars is None:
+        chars = ASCII_CHARS
+
     try:
-        response = requests.get(url, headers=BASE_HEADERS)
+        response = requests.get(url, headers=BASE_HEADERS, timeout=15)
         response.raise_for_status()
-        img = Image.open(io.BytesIO(response.content))
-        
-        # Создаём объект AsciiArt из изображения
-        my_art = AsciiArt.from_image(img)
-        # Генерируем ASCII-строку с нужной шириной
-        ascii_str = my_art.to_ascii(columns=columns)
-        return ascii_str
+
+        img = Image.open(io.BytesIO(response.content)).convert("RGB")
+
+        width, height = img.size
+        aspect = height / width
+        new_height = max(1, int(columns * aspect * 0.55))
+
+        img = img.resize((columns, new_height), Image.Resampling.LANCZOS)
+
+        out = []
+
+        for y in range(new_height):
+            line = ""
+            for x in range(columns):
+                r, g, b = img.getpixel((x, y))
+                gray = int(0.299 * r + 0.587 * g + 0.114 * b)
+                ch = chars[gray * (len(chars) - 1) // 255]
+                line += f"\033[38;2;{r};{g};{b}m{ch}"
+            line += "\033[0m"
+            out.append(line)
+
+        return "\n".join(out)
+
     except Exception as e:
         return f"[Не удалось преобразовать изображение: {e}]"
-        
+
 def print_feed(feed_data: dict) -> None:
     feed_list = feed_data.get("feed", [])
     if not feed_list:
@@ -282,11 +321,9 @@ def print_feed(feed_data: dict) -> None:
         created = post.get("created_at", "")
         is_liked = "❤️" if post.get("is_liked") else "🤍"
         print(f"{i}. {author} ({created}) — ID: {post_id}")
-        # Полный текст (не обрезаем)
         print(f"   {description}")
         print(f"   👍 {likes}  💬 {comments}  {is_liked}")
         
-        # Фото — вывод ASCII-арт для первого изображения
         photos = post.get("photos", [])
         if photos:
             photo_url = photos[0].get("url")
@@ -294,8 +331,7 @@ def print_feed(feed_data: dict) -> None:
                 full_url = BASE_URL + photo_url if photo_url.startswith("/") else photo_url
                 print("   📷 Изображение (ASCII-art):")
                 try:
-                    ascii_art = image_to_ascii(full_url, columns=60)
-                    # Печатаем построчно с отступом
+                    ascii_art = image_to_ascii(full_url)
                     for line in ascii_art.splitlines():
                         print(f"   {line}")
                 except Exception as e:
@@ -304,7 +340,6 @@ def print_feed(feed_data: dict) -> None:
             else:
                 print(f"   📷 {len(photos)} фото")
         
-        # Аудио — в формате "АВТОР - НАЗВАНИЕ"
         audios = post.get("audios", [])
         if audios:
             audio_strs = []
@@ -488,9 +523,9 @@ def print_top_users(top_data: dict) -> None:
 
 if __name__ == "__main__":
     while True:
-        choice = input_user(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17'],
+        choice = input_user(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18'],
                             "0. Выйти\n"
-                            "1. Вывести JSON пользователя\n"
+                            "1. Вывести JSON пользователя (своего)\n"
                             "2. Сделать текстовый пост\n"
                             "3. Удалить пост по ID\n"
                             "4. Показать комментарии к посту\n"
@@ -507,14 +542,14 @@ if __name__ == "__main__":
                             "15. Мои аудиозаписи\n"
                             "16. Все аудиозаписи\n"
                             "17. Топ пользователей (лучшие стрекозойды)\n"
-                            "18. Показать профиль пользователя")
+                            "18. Показать профиль пользователя (по имени)")
 
         if choice == '0':
             print("Выход.")
             break
 
         elif choice == '1':
-            print(json.dumps(get_profile("Wonordel", USER_ID).get("data", {}), indent=4, ensure_ascii=False))
+            print(json.dumps(get_profile(USERNAME, USER_ID).get("data", {}), indent=4, ensure_ascii=False))
             print()
 
         elif choice == '2':
