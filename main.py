@@ -1,6 +1,9 @@
 import requests
 import json
 import os
+import io
+from PIL import Image
+from ascii_magic import AsciiArt
 
 # ------------------- Загрузка секретов -------------------
 def load_secrets():
@@ -246,6 +249,24 @@ def get_feed(feed_type: str = "all", limit: int = 20, offset: int = 0) -> dict:
         "data": response.json() if response.text else {}
     }
 
+def image_to_ascii(url: str, columns: int = 60) -> str:
+    """
+    Загружает изображение по URL и возвращает ASCII-арт.
+    Параметр columns задаёт ширину в символах.
+    """
+    try:
+        response = requests.get(url, headers=BASE_HEADERS)
+        response.raise_for_status()
+        img = Image.open(io.BytesIO(response.content))
+        
+        # Создаём объект AsciiArt из изображения
+        my_art = AsciiArt.from_image(img)
+        # Генерируем ASCII-строку с нужной шириной
+        ascii_str = my_art.to_ascii(columns=columns)
+        return ascii_str
+    except Exception as e:
+        return f"[Не удалось преобразовать изображение: {e}]"
+        
 def print_feed(feed_data: dict) -> None:
     feed_list = feed_data.get("feed", [])
     if not feed_list:
@@ -261,14 +282,38 @@ def print_feed(feed_data: dict) -> None:
         created = post.get("created_at", "")
         is_liked = "❤️" if post.get("is_liked") else "🤍"
         print(f"{i}. {author} ({created}) — ID: {post_id}")
-        print(f"   {description[:100]}{'...' if len(description) > 100 else ''}")
+        # Полный текст (не обрезаем)
+        print(f"   {description}")
         print(f"   👍 {likes}  💬 {comments}  {is_liked}")
+        
+        # Фото — вывод ASCII-арт для первого изображения
         photos = post.get("photos", [])
         if photos:
-            print(f"   📷 {len(photos)} фото")
+            photo_url = photos[0].get("url")
+            if photo_url:
+                full_url = BASE_URL + photo_url if photo_url.startswith("/") else photo_url
+                print("   📷 Изображение (ASCII-art):")
+                try:
+                    ascii_art = image_to_ascii(full_url, columns=60)
+                    # Печатаем построчно с отступом
+                    for line in ascii_art.splitlines():
+                        print(f"   {line}")
+                except Exception as e:
+                    print(f"   [Ошибка: {e}]")
+                print(f"   Ссылка: {full_url}")
+            else:
+                print(f"   📷 {len(photos)} фото")
+        
+        # Аудио — в формате "АВТОР - НАЗВАНИЕ"
         audios = post.get("audios", [])
         if audios:
-            print(f"   🎵 {len(audios)} аудио")
+            audio_strs = []
+            for audio in audios:
+                artist = audio.get("artist", "Неизвестный")
+                title = audio.get("title", "Без названия")
+                audio_strs.append(f"{artist} - {title}")
+            print(f"   🎵 {', '.join(audio_strs)}")
+        
         poll = post.get("poll")
         if poll:
             print(f"   📊 Опрос: {poll.get('question')}")
@@ -333,7 +378,6 @@ def vote_poll(poll_id: int, choice_id: int) -> dict:
         "data": response.json() if response.text else {}
     }
 
-# ---------- Новая функция для получения уведомлений ----------
 def get_notifications(limit: int = 15, offset: int = 0) -> dict:
     url = f"{BASE_URL}/api/notifications"
     params = {"limit": limit, "offset": offset}
@@ -363,27 +407,107 @@ def print_notifications(notifications_list: list) -> None:
         print(f"   Цель: {target_id} | {read_status} | {created}")
         print()
 
+def get_my_audio() -> dict:
+    url = f"{BASE_URL}/api/audio/my"
+    headers = BASE_HEADERS.copy()
+    headers["Referer"] = "https://dragonfly-flash.ru/"
+    headers["Priority"] = "u=0"
+    response = requests.get(url, headers=headers, cookies=COOKIES)
+    return {
+        "status_code": response.status_code,
+        "data": response.json() if response.text else {}
+    }
+
+def get_all_audio(query: str = "", limit: int = 5000) -> dict:
+    url = f"{BASE_URL}/api/audio/all"
+    params = {"q": query, "limit": limit}
+    headers = BASE_HEADERS.copy()
+    headers["Referer"] = "https://dragonfly-flash.ru/"
+    headers["Priority"] = "u=0"
+    response = requests.get(url, headers=headers, cookies=COOKIES, params=params)
+    return {
+        "status_code": response.status_code,
+        "data": response.json() if response.text else {}
+    }
+
+def print_audio_list(audio_list: list, title: str, show_owner: bool = False) -> None:
+    if not audio_list:
+        print(f"{title}: нет записей.")
+        return
+    print(f"{title}: {len(audio_list)} записей")
+    for i, audio in enumerate(audio_list, 1):
+        audio_id = audio.get('id', 'N/A')
+        title_str = audio.get('title', 'Без названия')
+        artist = audio.get('artist', 'Неизвестен')
+        created = audio.get('created_at', '')
+        owner = ""
+        if show_owner:
+            owner_name = audio.get('owner_name', '')
+            if owner_name:
+                owner = f" (владелец: {owner_name})"
+        print(f"{i}. {title_str} — {artist}{owner}")
+        print(f"   ID: {audio_id}, добавлено: {created}")
+        if 'is_added' in audio:
+            added = "✅" if audio['is_added'] else "❌"
+            print(f"   В моих: {added}")
+        print()
+
+def get_top_users(limit: int = 50) -> dict:
+    url = f"{BASE_URL}/api/users/top"
+    params = {"limit": limit}
+    headers = BASE_HEADERS.copy()
+    headers["Referer"] = "https://dragonfly-flash.ru/"
+    headers["Priority"] = "u=0"
+    response = requests.get(url, headers=headers, cookies=COOKIES, params=params)
+    return {
+        "status_code": response.status_code,
+        "data": response.json() if response.text else {}
+    }
+
+def print_top_users(top_data: dict) -> None:
+    if top_data.get('status') != 'success':
+        print("Ошибка при получении топа пользователей.")
+        print(json.dumps(top_data, indent=4, ensure_ascii=False))
+        return
+    users = top_data.get('top_users', [])
+    if not users:
+        print("Топ пользователей пуст.")
+        return
+    print(f"🏆 Топ пользователей (лучшие стрекозойды): {len(users)} записей")
+    print("-" * 60)
+    for user in users:
+        rank = user.get('rank', '?')
+        username = user.get('username', 'Неизвестный')
+        rating = user.get('rating', 0)
+        badge = user.get('achievement_badge')
+        badge_str = f" [{badge}]" if badge else ""
+        print(f"{rank:>2}. {username:<20} — рейтинг: {rating}{badge_str}")
+    print("-" * 60)
+
 # ------------------- Основное меню -------------------
 
 if __name__ == "__main__":
     while True:
-        choice = input_user(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15'],
+        choice = input_user(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17'],
                             "0. Выйти\n"
-                            "1. Вывести JSON пользователя\n"
+                            "1. Вывести JSON пользователя (Wonordel)\n"
                             "2. Сделать текстовый пост\n"
                             "3. Удалить пост по ID\n"
                             "4. Показать комментарии к посту\n"
                             "5. Показать количество непрочитанных уведомлений\n"
-                            "6. Показать ленту (по умолчанию all, 20 постов)\n"
+                            "6. Показать ленту (тип: all или friends)\n"
                             "7. Сделать пост с аудио и/или изображениями\n"
                             "8. Поставить/убрать 'Мне нравится'\n"
                             "9. Добавить комментарий\n"
                             "10. Удалить комментарий по ID\n"
                             "11. Сделать репост поста\n"
-                            "12. Показать ленту друзей\n"
-                            "13. Сделать пост с опросом\n"
-                            "14. Проголосовать в опросе\n"
-                            "15. Прочитать уведомления")
+                            "12. Сделать пост с опросом\n"
+                            "13. Проголосовать в опросе\n"
+                            "14. Прочитать уведомления\n"
+                            "15. Мои аудиозаписи\n"
+                            "16. Все аудиозаписи\n"
+                            "17. Топ пользователей (лучшие стрекозойды)\n"
+                            "18. Показать профиль пользователя")
 
         if choice == '0':
             print("Выход.")
@@ -446,10 +570,13 @@ if __name__ == "__main__":
             print()
 
         elif choice == '6':
-            feed_type = input_with_cancel("Введите тип ленты (по умолчанию 'all', q — отмена): ") or "all"
+            feed_type = input_with_cancel("Введите тип ленты ('all' или 'friends', по умолчанию 'all', q — отмена): ") or "all"
             if feed_type is None:
                 print("Действие отменено.")
             else:
+                if feed_type not in ['all', 'friends']:
+                    print("Неверный тип, используем 'all'")
+                    feed_type = 'all'
                 try:
                     limit_str = input_with_cancel("Введите количество постов (по умолчанию 20, q — отмена): ")
                     if limit_str is None:
@@ -624,32 +751,6 @@ if __name__ == "__main__":
             print()
 
         elif choice == '12':
-            try:
-                limit_str = input_with_cancel("Введите количество постов (по умолчанию 20, q — отмена): ")
-                if limit_str is None:
-                    print("Действие отменено.")
-                    continue
-                limit = int(limit_str) if limit_str else 20
-
-                offset_str = input_with_cancel("Введите offset (по умолчанию 0, q — отмена): ")
-                if offset_str is None:
-                    print("Действие отменено.")
-                    continue
-                offset = int(offset_str) if offset_str else 0
-            except ValueError:
-                print("Введено не число, используем значения по умолчанию.")
-                limit, offset = 20, 0
-
-            result = get_feed('friends', limit, offset)
-            print(f"Код статуса: {result['status_code']}")
-            if result['status_code'] == 200:
-                print_feed(result['data'])
-            else:
-                print("Ошибка при получении ленты друзей:")
-                print(json.dumps(result['data'], indent=4, ensure_ascii=False))
-            print()
-
-        elif choice == '13':
             description = input_multiline_with_cancel("Введите описание поста (пустая строка — без описания, q/отмена — отменить):")
             if description is None:
                 print("Действие отменено.")
@@ -733,7 +834,7 @@ if __name__ == "__main__":
                 print(json.dumps(result['data'], indent=4, ensure_ascii=False))
             print()
 
-        elif choice == '14':
+        elif choice == '13':
             poll_id_str = input_with_cancel("Введите ID опроса (poll_id) (q — отмена): ")
             if poll_id_str is None:
                 print("Действие отменено.")
@@ -771,7 +872,7 @@ if __name__ == "__main__":
                 print(json.dumps(result['data'], indent=4, ensure_ascii=False))
             print()
 
-        elif choice == '15':
+        elif choice == '14':
             try:
                 limit_str = input_with_cancel("Введите количество уведомлений (по умолчанию 15, q — отмена): ")
                 if limit_str is None:
@@ -798,5 +899,92 @@ if __name__ == "__main__":
                     print(json.dumps(result['data'], indent=4, ensure_ascii=False))
             else:
                 print("Ошибка при получении уведомлений:")
+                print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            print()
+
+        elif choice == '15':
+            result = get_my_audio()
+            print(f"Код статуса: {result['status_code']}")
+            if result['status_code'] == 200:
+                if isinstance(result['data'], list):
+                    print_audio_list(result['data'], "Мои аудиозаписи", show_owner=False)
+                else:
+                    print("Неожиданный формат ответа:")
+                    print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            else:
+                print("Ошибка при получении моих аудиозаписей:")
+                print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            print()
+
+        elif choice == '16':
+            query = input_with_cancel("Введите поисковый запрос (или оставьте пустым, q — отмена): ") or ""
+            if query is None:
+                print("Действие отменено.")
+                print()
+                continue
+            try:
+                limit_str = input_with_cancel("Введите лимит (по умолчанию 5000, q — отмена): ")
+                if limit_str is None:
+                    print("Действие отменено.")
+                    continue
+                limit = int(limit_str) if limit_str else 5000
+            except ValueError:
+                print("Введено не число, используем лимит 5000.")
+                limit = 5000
+
+            result = get_all_audio(query, limit)
+            print(f"Код статуса: {result['status_code']}")
+            if result['status_code'] == 200:
+                if isinstance(result['data'], list):
+                    print_audio_list(result['data'], "Все аудиозаписи", show_owner=True)
+                else:
+                    print("Неожиданный формат ответа:")
+                    print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            else:
+                print("Ошибка при получении всех аудиозаписей:")
+                print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            print()
+
+        elif choice == '17':
+            try:
+                limit_str = input_with_cancel("Введите количество пользователей в топе (по умолчанию 50, q — отмена): ")
+                if limit_str is None:
+                    print("Действие отменено.")
+                    continue
+                limit = int(limit_str) if limit_str else 50
+            except ValueError:
+                print("Введено не число, используем лимит 50.")
+                limit = 50
+
+            result = get_top_users(limit)
+            print(f"Код статуса: {result['status_code']}")
+            if result['status_code'] == 200:
+                print_top_users(result['data'])
+            else:
+                print("Ошибка при получении топа пользователей:")
+                print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            print()
+
+        elif choice == '18':
+            username = input_with_cancel("Введите имя пользователя (q — отмена): ")
+            if username is None:
+                print("Действие отменено.")
+                print()
+                continue
+            if username.strip() == "":
+                print("Имя пользователя не может быть пустым.")
+                print()
+                continue
+
+            result = get_profile(username, USER_ID)
+            print(f"Код статуса: {result['status_code']}")
+            if result['status_code'] == 200:
+                profile_data = result['data']
+                if profile_data:
+                    print_profile(profile_data)
+                else:
+                    print("Профиль не найден или данные пусты.")
+            else:
+                print("Ошибка при получении профиля:")
                 print(json.dumps(result['data'], indent=4, ensure_ascii=False))
             print()
