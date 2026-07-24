@@ -116,10 +116,6 @@ def publish_post_with_media(text: str, audio_ids: list = None, file_paths: list 
 
 def publish_post_with_poll(description: str, poll_question: str, poll_choices: list, 
                            audio_ids: list = None, file_paths: list = None) -> dict:
-    """
-    Публикует пост с опросом.
-    poll_choices — список строк (варианты ответа).
-    """
     url = f"{BASE_URL}/api/upload_post_modernized"
     data = {}
     if description:
@@ -325,13 +321,7 @@ def repost_post(post_id: int) -> dict:
         "data": response.json() if response.text else {}
     }
 
-# ---------- Новая функция для голосования в опросе ----------
 def vote_poll(poll_id: int, choice_id: int) -> dict:
-    """
-    Голосует в опросе.
-    poll_id — ID опроса (из URL)
-    choice_id — ID выбранного варианта
-    """
     url = f"{BASE_URL}/api/polls/{poll_id}/vote"
     files = {"choice_id": (None, str(choice_id))}
     headers = BASE_HEADERS.copy()
@@ -343,11 +333,41 @@ def vote_poll(poll_id: int, choice_id: int) -> dict:
         "data": response.json() if response.text else {}
     }
 
+# ---------- Новая функция для получения уведомлений ----------
+def get_notifications(limit: int = 15, offset: int = 0) -> dict:
+    url = f"{BASE_URL}/api/notifications"
+    params = {"limit": limit, "offset": offset}
+    headers = BASE_HEADERS.copy()
+    headers["Referer"] = "https://dragonfly-flash.ru/"
+    headers["Priority"] = "u=0"
+    response = requests.get(url, headers=headers, cookies=COOKIES, params=params)
+    return {
+        "status_code": response.status_code,
+        "data": response.json() if response.text else {}
+    }
+
+def print_notifications(notifications_list: list) -> None:
+    if not notifications_list:
+        print("Уведомлений нет.")
+        return
+    print(f"Всего уведомлений: {len(notifications_list)}")
+    for i, notif in enumerate(notifications_list, 1):
+        notif_id = notif.get('id', 'N/A')
+        notif_type = notif.get('type', 'unknown')
+        text = notif.get('text', '')
+        target_id = notif.get('target_id', 'N/A')
+        is_read = notif.get('is_read', False)
+        created = notif.get('created_at', '')
+        read_status = "✅ Прочитано" if is_read else "🔴 Не прочитано"
+        print(f"{i}. [ID {notif_id}] {notif_type} — {text}")
+        print(f"   Цель: {target_id} | {read_status} | {created}")
+        print()
+
 # ------------------- Основное меню -------------------
 
 if __name__ == "__main__":
     while True:
-        choice = input_user(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'],
+        choice = input_user(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15'],
                             "0. Выйти\n"
                             "1. Вывести JSON пользователя\n"
                             "2. Сделать текстовый пост\n"
@@ -362,7 +382,8 @@ if __name__ == "__main__":
                             "11. Сделать репост поста\n"
                             "12. Показать ленту друзей\n"
                             "13. Сделать пост с опросом\n"
-                            "14. Проголосовать в опросе")
+                            "14. Проголосовать в опросе\n"
+                            "15. Прочитать уведомления")
 
         if choice == '0':
             print("Выход.")
@@ -747,5 +768,35 @@ if __name__ == "__main__":
                     print(f"Ответ сервера: {data}")
             else:
                 print("Ошибка при голосовании:")
+                print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            print()
+
+        elif choice == '15':
+            try:
+                limit_str = input_with_cancel("Введите количество уведомлений (по умолчанию 15, q — отмена): ")
+                if limit_str is None:
+                    print("Действие отменено.")
+                    continue
+                limit = int(limit_str) if limit_str else 15
+
+                offset_str = input_with_cancel("Введите offset (по умолчанию 0, q — отмена): ")
+                if offset_str is None:
+                    print("Действие отменено.")
+                    continue
+                offset = int(offset_str) if offset_str else 0
+            except ValueError:
+                print("Введено не число, используем значения по умолчанию.")
+                limit, offset = 15, 0
+
+            result = get_notifications(limit, offset)
+            print(f"Код статуса: {result['status_code']}")
+            if result['status_code'] == 200:
+                if isinstance(result['data'], list):
+                    print_notifications(result['data'])
+                else:
+                    print("Неожиданный формат ответа:")
+                    print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            else:
+                print("Ошибка при получении уведомлений:")
                 print(json.dumps(result['data'], indent=4, ensure_ascii=False))
             print()
