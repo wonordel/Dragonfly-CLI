@@ -114,6 +114,44 @@ def publish_post_with_media(text: str, audio_ids: list = None, file_paths: list 
         "data": response.json() if response.text else {}
     }
 
+def publish_post_with_poll(description: str, poll_question: str, poll_choices: list, 
+                           audio_ids: list = None, file_paths: list = None) -> dict:
+    """
+    Публикует пост с опросом.
+    poll_choices — список строк (варианты ответа).
+    """
+    url = f"{BASE_URL}/api/upload_post_modernized"
+    data = {}
+    if description:
+        data["description"] = description
+    data["poll_question"] = poll_question
+    data["poll_choices"] = json.dumps(poll_choices)
+    
+    if audio_ids:
+        data["audio_ids"] = ",".join(map(str, audio_ids))
+    
+    files = []
+    if file_paths:
+        for path in file_paths:
+            if os.path.exists(path):
+                ext = os.path.splitext(path)[1].lower()
+                content_type = "image/jpeg"
+                if ext in [".png"]:
+                    content_type = "image/png"
+                elif ext in [".gif"]:
+                    content_type = "image/gif"
+                elif ext in [".webp"]:
+                    content_type = "image/webp"
+                files.append(("files", (os.path.basename(path), open(path, "rb"), content_type)))
+            else:
+                print(f"Файл {path} не найден, пропускаем.")
+    
+    response = requests.post(url, headers=BASE_HEADERS, cookies=COOKIES, data=data, files=files)
+    return {
+        "status_code": response.status_code,
+        "data": response.json() if response.text else {}
+    }
+
 def get_profile(username: str, user_id: int) -> dict:
     url = f"{BASE_URL}/api/get_profile"
     params = {"username": username, "current_user_id": user_id}
@@ -276,7 +314,6 @@ def delete_comment(comment_id: int) -> dict:
     }
 
 def repost_post(post_id: int) -> dict:
-    """Репост (обычный репост без комментария)."""
     url = f"{BASE_URL}/api/posts/{post_id}/repost"
     headers = BASE_HEADERS.copy()
     headers["Referer"] = "https://dragonfly-flash.ru/"
@@ -288,11 +325,29 @@ def repost_post(post_id: int) -> dict:
         "data": response.json() if response.text else {}
     }
 
+# ---------- Новая функция для голосования в опросе ----------
+def vote_poll(poll_id: int, choice_id: int) -> dict:
+    """
+    Голосует в опросе.
+    poll_id — ID опроса (из URL)
+    choice_id — ID выбранного варианта
+    """
+    url = f"{BASE_URL}/api/polls/{poll_id}/vote"
+    files = {"choice_id": (None, str(choice_id))}
+    headers = BASE_HEADERS.copy()
+    headers["Referer"] = "https://dragonfly-flash.ru/"
+    headers["Priority"] = "u=0"
+    response = requests.post(url, headers=headers, cookies=COOKIES, files=files)
+    return {
+        "status_code": response.status_code,
+        "data": response.json() if response.text else {}
+    }
+
 # ------------------- Основное меню -------------------
 
 if __name__ == "__main__":
     while True:
-        choice = input_user(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11'],
+        choice = input_user(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14'],
                             "0. Выйти\n"
                             "1. Вывести JSON пользователя\n"
                             "2. Сделать текстовый пост\n"
@@ -304,7 +359,10 @@ if __name__ == "__main__":
                             "8. Поставить/убрать 'Мне нравится'\n"
                             "9. Добавить комментарий\n"
                             "10. Удалить комментарий по ID\n"
-                            "11. Сделать репост поста")
+                            "11. Сделать репост поста\n"
+                            "12. Показать ленту друзей\n"
+                            "13. Сделать пост с опросом\n"
+                            "14. Проголосовать в опросе")
 
         if choice == '0':
             print("Выход.")
@@ -542,4 +600,152 @@ if __name__ == "__main__":
                         print(json.dumps(result['data'], indent=4, ensure_ascii=False))
                 except ValueError:
                     print("ID должен быть числом.")
+            print()
+
+        elif choice == '12':
+            try:
+                limit_str = input_with_cancel("Введите количество постов (по умолчанию 20, q — отмена): ")
+                if limit_str is None:
+                    print("Действие отменено.")
+                    continue
+                limit = int(limit_str) if limit_str else 20
+
+                offset_str = input_with_cancel("Введите offset (по умолчанию 0, q — отмена): ")
+                if offset_str is None:
+                    print("Действие отменено.")
+                    continue
+                offset = int(offset_str) if offset_str else 0
+            except ValueError:
+                print("Введено не число, используем значения по умолчанию.")
+                limit, offset = 20, 0
+
+            result = get_feed('friends', limit, offset)
+            print(f"Код статуса: {result['status_code']}")
+            if result['status_code'] == 200:
+                print_feed(result['data'])
+            else:
+                print("Ошибка при получении ленты друзей:")
+                print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            print()
+
+        elif choice == '13':
+            description = input_multiline_with_cancel("Введите описание поста (пустая строка — без описания, q/отмена — отменить):")
+            if description is None:
+                print("Действие отменено.")
+                print()
+                continue
+
+            poll_question = input_with_cancel("Введите вопрос опроса (q/отмена — отменить): ")
+            if poll_question is None:
+                print("Действие отменено.")
+                print()
+                continue
+            if poll_question.strip() == "":
+                print("Вопрос опроса не может быть пустым.")
+                print()
+                continue
+
+            print("Введите варианты ответа (по одному, пустая строка для завершения, q/отмена — отменить):")
+            poll_choices = []
+            while True:
+                choice_text = input(">>> ").strip()
+                if choice_text.lower() in ('q', 'отмена', 'cancel'):
+                    print("Действие отменено.")
+                    poll_choices = None
+                    break
+                if choice_text == "":
+                    if len(poll_choices) < 2:
+                        print("Нужно ввести минимум 2 варианта. Продолжайте.")
+                        continue
+                    else:
+                        break
+                poll_choices.append(choice_text)
+            if poll_choices is None:
+                print()
+                continue
+            if len(poll_choices) < 2:
+                print("Недостаточно вариантов (нужно минимум 2). Действие отменено.")
+                print()
+                continue
+
+            audio_input = input_with_cancel("Введите ID аудио через запятую (или оставьте пустым, q — отмена): ")
+            if audio_input is None:
+                print("Действие отменено.")
+                print()
+                continue
+            audio_ids = []
+            if audio_input.strip():
+                try:
+                    audio_ids = [int(x.strip()) for x in audio_input.split(",") if x.strip()]
+                except ValueError:
+                    print("Некорректный ввод ID аудио, пропускаем.")
+
+            file_paths = []
+            print("Введите пути к файлам изображений (по одному, пустая строка для завершения, q/отмена — отменить действие):")
+            while True:
+                path = input(">>> ").strip()
+                if path.lower() in ('q', 'отмена', 'cancel'):
+                    print("Действие отменено.")
+                    file_paths = None
+                    break
+                if not path:
+                    break
+                if os.path.exists(path):
+                    file_paths.append(path)
+                else:
+                    print(f"Файл не найден: {path}")
+            if file_paths is None:
+                print()
+                continue
+
+            result = publish_post_with_poll(description, poll_question, poll_choices, audio_ids, file_paths)
+            print(f"Код статуса: {result['status_code']}")
+            if result['status_code'] == 200:
+                data = result['data']
+                post_id = data.get('post_id')
+                if post_id:
+                    print(f"✅ Пост с опросом опубликован (ID: {post_id})")
+                else:
+                    print(f"Ответ сервера: {data}")
+            else:
+                print("Ошибка при публикации поста с опросом:")
+                print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            print()
+
+        elif choice == '14':
+            poll_id_str = input_with_cancel("Введите ID опроса (poll_id) (q — отмена): ")
+            if poll_id_str is None:
+                print("Действие отменено.")
+                print()
+                continue
+            try:
+                poll_id = int(poll_id_str)
+            except ValueError:
+                print("ID опроса должен быть числом.")
+                print()
+                continue
+
+            choice_id_str = input_with_cancel("Введите ID варианта (choice_id) (q — отмена): ")
+            if choice_id_str is None:
+                print("Действие отменено.")
+                print()
+                continue
+            try:
+                choice_id = int(choice_id_str)
+            except ValueError:
+                print("ID варианта должен быть числом.")
+                print()
+                continue
+
+            result = vote_poll(poll_id, choice_id)
+            print(f"Код статуса: {result['status_code']}")
+            if result['status_code'] == 200:
+                data = result['data']
+                if data.get('status') == 'ok':
+                    print(f"✅ {data.get('message', 'Голос учтён')}")
+                else:
+                    print(f"Ответ сервера: {data}")
+            else:
+                print("Ошибка при голосовании:")
+                print(json.dumps(result['data'], indent=4, ensure_ascii=False))
             print()
