@@ -3,6 +3,8 @@ import json
 import os
 import io
 from PIL import Image
+import colorama
+colorama.init()  # автоматически преобразует ANSI-коды в вызовы Windows API
 
 # ------------------- Загрузка секретов -------------------
 def load_secrets():
@@ -106,7 +108,7 @@ def publish_post(text: str) -> dict:
     response = requests.post(url, headers=BASE_HEADERS, cookies=COOKIES, files=files)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def publish_post_with_media(text: str, audio_ids: list = None, file_paths: list = None) -> dict:
@@ -136,7 +138,7 @@ def publish_post_with_media(text: str, audio_ids: list = None, file_paths: list 
     response = requests.post(url, headers=BASE_HEADERS, cookies=COOKIES, data=data, files=files)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def publish_post_with_poll(description: str, poll_question: str, poll_choices: list, 
@@ -170,7 +172,7 @@ def publish_post_with_poll(description: str, poll_question: str, poll_choices: l
     response = requests.post(url, headers=BASE_HEADERS, cookies=COOKIES, data=data, files=files)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def get_profile(username: str, user_id: int) -> dict:
@@ -179,7 +181,7 @@ def get_profile(username: str, user_id: int) -> dict:
     response = requests.get(url, headers=BASE_HEADERS, cookies=COOKIES, params=params)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def print_profile(profile_data: dict) -> None:
@@ -204,7 +206,7 @@ def delete_post(post_id: int) -> dict:
     response = requests.delete(url, headers=BASE_HEADERS, cookies=COOKIES)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def get_comments(post_id: int, user_id: int) -> dict:
@@ -213,7 +215,7 @@ def get_comments(post_id: int, user_id: int) -> dict:
     response = requests.get(url, headers=BASE_HEADERS, cookies=COOKIES, params=params)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def print_comments(comments_list: list) -> None:
@@ -236,7 +238,7 @@ def get_unread_count() -> dict:
     response = requests.get(url, headers=headers, cookies=COOKIES)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def print_unread_count(result: dict) -> None:
@@ -268,41 +270,39 @@ def get_feed(feed_type: str = "all", limit: int = 20, offset: int = 0) -> dict:
     response = requests.get(url, headers=headers, cookies=COOKIES, params=params)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
-def image_to_ascii(url: str, columns: int = None, chars: str = None) -> str:
+def image_to_ascii(url: str, columns: int = None, chars: str = None, color: bool = None) -> str:
     if columns is None:
         columns = ASCII_COLUMNS
     if chars is None:
         chars = ASCII_CHARS
+    if color is None:
+        color = SETTINGS.get("ascii_color_enabled", True)
 
     try:
         response = requests.get(url, headers=BASE_HEADERS, timeout=15)
         response.raise_for_status()
-
         img = Image.open(io.BytesIO(response.content)).convert("RGB")
-
         width, height = img.size
         aspect = height / width
         new_height = max(1, int(columns * aspect * 0.55))
-
         img = img.resize((columns, new_height), Image.Resampling.LANCZOS)
 
         out = []
-
         for y in range(new_height):
             line = ""
             for x in range(columns):
                 r, g, b = img.getpixel((x, y))
                 gray = int(0.299 * r + 0.587 * g + 0.114 * b)
                 ch = chars[gray * (len(chars) - 1) // 255]
-                line += f"\033[38;2;{r};{g};{b}m{ch}"
-            line += "\033[0m"
+                if color:
+                    line += f"\033[38;2;{r};{g};{b}m{ch}\033[0m"
+                else:
+                    line += ch
             out.append(line)
-
         return "\n".join(out)
-
     except Exception as e:
         return f"[Не удалось преобразовать изображение: {e}]"
 
@@ -354,6 +354,16 @@ def print_feed(feed_data: dict) -> None:
             print(f"   📊 Опрос: {poll.get('question')}")
         print()
 
+def safe_json(response):
+    try:
+        return response.json()
+    except requests.exceptions.JSONDecodeError:
+        return {
+            "_error": "invalid_json",
+            "_status_code": response.status_code,
+            "_raw": response.text[:500] if response.text else ""
+        }
+
 def like_post(post_id: int) -> dict:
     url = f"{BASE_URL}/api/like"
     files = {"post_id": (None, str(post_id))}
@@ -363,7 +373,7 @@ def like_post(post_id: int) -> dict:
     response = requests.post(url, headers=headers, cookies=COOKIES, files=files)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def add_comment(post_id: int, text: str) -> dict:
@@ -378,7 +388,7 @@ def add_comment(post_id: int, text: str) -> dict:
     response = requests.post(url, headers=headers, cookies=COOKIES, files=files)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def delete_comment(comment_id: int) -> dict:
@@ -386,7 +396,7 @@ def delete_comment(comment_id: int) -> dict:
     response = requests.delete(url, headers=BASE_HEADERS, cookies=COOKIES)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def repost_post(post_id: int) -> dict:
@@ -398,7 +408,7 @@ def repost_post(post_id: int) -> dict:
     response = requests.post(url, headers=headers, cookies=COOKIES)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def vote_poll(poll_id: int, choice_id: int) -> dict:
@@ -410,7 +420,7 @@ def vote_poll(poll_id: int, choice_id: int) -> dict:
     response = requests.post(url, headers=headers, cookies=COOKIES, files=files)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def get_notifications(limit: int = 15, offset: int = 0) -> dict:
@@ -422,7 +432,7 @@ def get_notifications(limit: int = 15, offset: int = 0) -> dict:
     response = requests.get(url, headers=headers, cookies=COOKIES, params=params)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def print_notifications(notifications_list: list) -> None:
@@ -450,7 +460,7 @@ def get_my_audio() -> dict:
     response = requests.get(url, headers=headers, cookies=COOKIES)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def get_all_audio(query: str = "", limit: int = 5000) -> dict:
@@ -462,7 +472,7 @@ def get_all_audio(query: str = "", limit: int = 5000) -> dict:
     response = requests.get(url, headers=headers, cookies=COOKIES, params=params)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def print_audio_list(audio_list: list, title: str, show_owner: bool = False) -> None:
@@ -496,7 +506,7 @@ def get_top_users(limit: int = 50) -> dict:
     response = requests.get(url, headers=headers, cookies=COOKIES, params=params)
     return {
         "status_code": response.status_code,
-        "data": response.json() if response.text else {}
+        "data": safe_json(response) if response.text else {}
     }
 
 def print_top_users(top_data: dict) -> None:

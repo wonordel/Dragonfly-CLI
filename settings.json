@@ -1,4 +1,5 @@
 {
     "ascii_columns": 40,
-    "ascii_chars": "█▓▒░@%#*+=-:. "
+    "ascii_chars": "█▓▒░@%#*+=-:. ",
+    "ascii_color_enabled": true
 }
