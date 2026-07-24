@@ -31,6 +31,37 @@ def input_user(possible: list, text: str):
         else:
             return user_input
 
+def input_with_cancel(prompt: str, cancel_values=('q', 'отмена', 'cancel')):
+    """
+    Запрашивает ввод, позволяет отменить действие вводом одного из cancel_values.
+    Возвращает введённую строку или None, если введено отмена.
+    """
+    value = input(prompt).strip()
+    if value.lower() in cancel_values:
+        return None
+    return value
+
+def input_multiline_with_cancel(prompt: str, cancel_values=('q', 'отмена', 'cancel')):
+    """
+    Ввод многострочного текста. Пустая строка завершает ввод.
+    Если первая строка равна одному из cancel_values, возвращает None (отмена).
+    Иначе возвращает собранный текст.
+    """
+    print(prompt)
+    lines = []
+    first_line = input(">>> ").strip()
+    if first_line.lower() in cancel_values:
+        return None
+    if first_line == "":
+        return ""  # пустой текст (можно без текста)
+    lines.append(first_line)
+    while True:
+        line = input(">>> ")
+        if line == "":
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
 # Базовые заголовки, общие для большинства запросов
 BASE_HEADERS = {
     "User-Agent": USER_AGENT,
@@ -55,9 +86,44 @@ COOKIES = {"access_token": ACCESS_TOKEN}
 # ------------------- Функции API -------------------
 
 def publish_post(text: str) -> dict:
+    """Публикует только текстовый пост."""
     url = f"{BASE_URL}/api/upload_post_modernized"
     files = {"description": (None, text, "text/plain")}
     response = requests.post(url, headers=BASE_HEADERS, cookies=COOKIES, files=files)
+    return {
+        "status_code": response.status_code,
+        "data": response.json() if response.text else {}
+    }
+
+def publish_post_with_media(text: str, audio_ids: list = None, file_paths: list = None) -> dict:
+    """
+    Публикует пост с текстом, аудио (список ID) и изображениями (список путей к файлам).
+    """
+    url = f"{BASE_URL}/api/upload_post_modernized"
+    data = {}
+    if text:
+        data["description"] = text
+    if audio_ids:
+        data["audio_ids"] = ",".join(map(str, audio_ids))
+    
+    files = []
+    if file_paths:
+        for path in file_paths:
+            if os.path.exists(path):
+                # Определяем MIME-тип по расширению
+                ext = os.path.splitext(path)[1].lower()
+                content_type = "image/jpeg"
+                if ext in [".png"]:
+                    content_type = "image/png"
+                elif ext in [".gif"]:
+                    content_type = "image/gif"
+                elif ext in [".webp"]:
+                    content_type = "image/webp"
+                files.append(("files", (os.path.basename(path), open(path, "rb"), content_type)))
+            else:
+                print(f"Файл {path} не найден, пропускаем.")
+    
+    response = requests.post(url, headers=BASE_HEADERS, cookies=COOKIES, data=data, files=files)
     return {
         "status_code": response.status_code,
         "data": response.json() if response.text else {}
@@ -193,83 +259,146 @@ def print_feed(feed_data: dict) -> None:
 
 if __name__ == "__main__":
     while True:
-        choice = input_user(['0', '1', '2', '3', '4', '5', '6'],
+        choice = input_user(['0', '1', '2', '3', '4', '5', '6', '7'],
                             "0. Вывести JSON пользователя\n"
                             "1. Сделать текстовый пост\n"
                             "2. Удалить пост по ID\n"
                             "3. Показать комментарии к посту\n"
                             "4. Показать количество непрочитанных уведомлений\n"
                             "5. Показать ленту (по умолчанию all, 20 постов)\n"
-                            "6. Выйти")
+                            "6. Сделать пост с аудио и/или изображениями\n"
+                            "7. Выйти")
         
         if choice == '0':
             print(json.dumps(get_profile("Wonordel", USER_ID).get("data", {}), indent=4, ensure_ascii=False))
+            print()  # разделитель
         
         elif choice == '1':
-            print("Введите пост (``` чтобы закончить, ```` чтобы отменить)")
-            lines = []
-            while True:
-                line = input(">>> ")
-                if line == '````':
-                    print("Отменено.")
-                    lines = None
-                    break
-                if line == '```':
-                    break
-                lines.append(line)
-            if lines is not None:
-                text = '\n'.join(lines)
-                publish = publish_post(text) 
-                print(f"Код статуса: {publish['status_code']}")
-                print(f"Данные: {publish['data']}")
+            text = input_multiline_with_cancel("Введите текст поста (пустая строка — завершить ввод, q/отмена — отменить):")
+            if text is None:
+                print("Действие отменено.")
+            else:
+                result = publish_post(text)
+                print(f"Код статуса: {result['status_code']}")
+                print(f"Данные: {result['data']}")
+            print()
         
         elif choice == '2':
-            try:
-                post_id = int(input("Введите ID поста для удаления: "))
-                result = delete_post(post_id)
-                print(f"Код статуса: {result['status_code']}")
-                print(f"Ответ сервера: {result['data']}")
-            except ValueError:
-                print("ID должен быть числом.")
+            post_id_str = input_with_cancel("Введите ID поста для удаления (q — отмена): ")
+            if post_id_str is None:
+                print("Действие отменено.")
+            else:
+                try:
+                    post_id = int(post_id_str)
+                    result = delete_post(post_id)
+                    print(f"Код статуса: {result['status_code']}")
+                    print(f"Ответ сервера: {result['data']}")
+                except ValueError:
+                    print("ID должен быть числом.")
+            print()
         
         elif choice == '3':
-            try:
-                post_id = int(input("Введите ID поста: "))
-                result = get_comments(post_id, USER_ID)
-                print(f"Код статуса: {result['status_code']}")
-                if result['status_code'] == 200:
-                    if isinstance(result['data'], list):
-                        print_comments(result['data'])
+            post_id_str = input_with_cancel("Введите ID поста для просмотра комментариев (q — отмена): ")
+            if post_id_str is None:
+                print("Действие отменено.")
+            else:
+                try:
+                    post_id = int(post_id_str)
+                    result = get_comments(post_id, USER_ID)
+                    print(f"Код статуса: {result['status_code']}")
+                    if result['status_code'] == 200:
+                        if isinstance(result['data'], list):
+                            print_comments(result['data'])
+                        else:
+                            print("Неожиданный формат ответа:")
+                            print(json.dumps(result['data'], indent=4, ensure_ascii=False))
                     else:
-                        print("Неожиданный формат ответа:")
+                        print("Ошибка при получении комментариев:")
                         print(json.dumps(result['data'], indent=4, ensure_ascii=False))
-                else:
-                    print("Ошибка при получении комментариев:")
-                    print(json.dumps(result['data'], indent=4, ensure_ascii=False))
-            except ValueError:
-                print("ID должен быть числом.")
+                except ValueError:
+                    print("ID должен быть числом.")
+            print()
         
         elif choice == '4':
             result = get_unread_count()
             print(f"Код статуса: {result['status_code']}")
             print_unread_count(result)
+            print()
         
         elif choice == '5':
-            feed_type = input("Введите тип ленты (по умолчанию 'all'): ") or "all"
-            try:
-                limit = int(input("Введите количество постов (по умолчанию 20): ") or 20)
-                offset = int(input("Введите offset (по умолчанию 0): ") or 0)
-            except ValueError:
-                print("Введено не число, используем значения по умолчанию.")
-                limit, offset = 20, 0
-            result = get_feed(feed_type, limit, offset)
-            print(f"Код статуса: {result['status_code']}")
-            if result['status_code'] == 200:
-                print_feed(result['data'])
+            feed_type = input_with_cancel("Введите тип ленты (по умолчанию 'all', q — отмена): ") or "all"
+            if feed_type is None:
+                print("Действие отменено.")
             else:
-                print("Ошибка при получении ленты:")
-                print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+                try:
+                    limit_str = input_with_cancel("Введите количество постов (по умолчанию 20, q — отмена): ")
+                    if limit_str is None:
+                        print("Действие отменено.")
+                        continue
+                    limit = int(limit_str) if limit_str else 20
+                    
+                    offset_str = input_with_cancel("Введите offset (по умолчанию 0, q — отмена): ")
+                    if offset_str is None:
+                        print("Действие отменено.")
+                        continue
+                    offset = int(offset_str) if offset_str else 0
+                except ValueError:
+                    print("Введено не число, используем значения по умолчанию.")
+                    limit, offset = 20, 0
+                result = get_feed(feed_type, limit, offset)
+                print(f"Код статуса: {result['status_code']}")
+                if result['status_code'] == 200:
+                    print_feed(result['data'])
+                else:
+                    print("Ошибка при получении ленты:")
+                    print(json.dumps(result['data'], indent=4, ensure_ascii=False))
+            print()
         
         elif choice == '6':
+            # Ввод текста
+            text = input_multiline_with_cancel("Введите текст поста (пустая строка — без текста, q/отмена — отменить):")
+            if text is None:
+                print("Действие отменено.")
+                print()
+                continue
+            
+            # Аудио ID
+            audio_input = input_with_cancel("Введите ID аудио через запятую (или оставьте пустым, q — отмена): ")
+            if audio_input is None:
+                print("Действие отменено.")
+                print()
+                continue
+            audio_ids = []
+            if audio_input.strip():
+                try:
+                    audio_ids = [int(x.strip()) for x in audio_input.split(",") if x.strip()]
+                except ValueError:
+                    print("Некорректный ввод ID аудио, пропускаем.")
+            
+            # Файлы изображений
+            file_paths = []
+            print("Введите пути к файлам изображений (по одному, пустая строка для завершения, q/отмена — отменить действие):")
+            while True:
+                path = input(">>> ").strip()
+                if path.lower() in ('q', 'отмена', 'cancel'):
+                    print("Действие отменено.")
+                    file_paths = None
+                    break
+                if not path:
+                    break
+                if os.path.exists(path):
+                    file_paths.append(path)
+                else:
+                    print(f"Файл не найден: {path}")
+            if file_paths is None:
+                print()
+                continue
+            
+            result = publish_post_with_media(text, audio_ids, file_paths)
+            print(f"Код статуса: {result['status_code']}")
+            print(f"Ответ сервера: {result['data']}")
+            print()
+        
+        elif choice == '7':
             print("Выход.")
             break
